@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { QRCodeSVG } from "qrcode.react";
 
 const SUPABASE_URL = "https://pjqwuamhlehiotkfolph.supabase.co";
-const SUPABASE_KEY = "sb_publishable_azaiG_ix8j4oCIrJQEuvvA_wy_rOQJI";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBqcXd1YW1obGVoaW90a2ZvbHBoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNDE5NzMsImV4cCI6MjA4ODcxNzk3M30.1CRLAhVhiPvdOzAZ6SqCic0iLULsYvCRRxf5yN3acjM";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 

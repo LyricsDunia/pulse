@@ -8,114 +8,110 @@ const SUPABASE_KEY = "sb_publishable_azaiG_ix8j4oCIrJQEuvvA_wy_rOQJI";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 
-export default function PulseComplete() {
+
+export default function PulseUltimate() {
   const [view, setView] = useState("landing");
   const [myName, setMyName] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [presence, setPresence] = useState({});
+  const [timeLeft, setTimeLeft] = useState("");
+  
+  const channelRef = useRef(null);
   const messagesEndRef = useRef(null);
 
-  // 1. Initial URL Check
+  // 1. URL Parameter Check
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const join = params.get("join");
     if (join) { setRoomCode(join.toUpperCase()); setView("join"); }
   }, []);
 
-  // 2. The Realtime Sync Engine
+  // 2. Realtime Engine & Timer
   useEffect(() => {
     if (view !== "chat" || !roomCode) return;
 
-    // Load initial messages
-    const loadMessages = async () => {
-      console.log("Fetching history for room:", roomCode);
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('room_code', roomCode)
-        .order('created_at', { ascending: true });
-      
-      if (error) console.error("History Error:", error);
-      else setMessages(data || []);
-    };
-    loadMessages();
+    // Load history and check room expiry
+    const initRoom = async () => {
+      const { data: room } = await supabase.from('rooms').select('*').eq('code', roomCode).single();
+      if (!room) { alert("Room expired or not found"); setView("landing"); return; }
 
-    // Subscribe to Realtime
-    const channel = supabase.channel(`room_${roomCode}`, {
-      config: { presence: { key: myName } }
-    });
+      // Timer Logic
+      const expiryTime = new Date(room.created_at).getTime() + 30 * 60000;
+      const timer = setInterval(() => {
+        const now = new Date().getTime();
+        const diff = expiryTime - now;
+        if (diff <= 0) {
+          clearInterval(timer);
+          handleRoomExpiry();
+        } else {
+          const mins = Math.floor(diff / 60000);
+          const secs = Math.floor((diff % 60000) / 1000);
+          setTimeLeft(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
+        }
+      }, 1000);
+
+      const { data: msgs } = await supabase.from('messages').select('*').eq('room_code', roomCode).order('created_at', { ascending: true });
+      setMessages(msgs || []);
+      return () => clearInterval(timer);
+    };
+    initRoom();
+
+    // Aggressive Realtime Listener
+    const channel = supabase.channel(`pulse_${roomCode}`, { config: { presence: { key: myName } } });
+    channelRef.current = channel;
 
     channel
-      .on('postgres_changes', { 
-        event: 'INSERT', 
-        schema: 'public', 
-        table: 'messages', 
-        filter: `room_code=eq.${roomCode}` 
-      }, (payload) => {
-        console.log("New message received via Realtime:", payload.new);
-        setMessages(curr => [...curr, payload.new]);
-      })
-      .on('presence', { event: 'sync' }, () => {
-        setPresence(channel.presenceState());
-      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_code=eq.${roomCode}` }, 
+        (p) => setMessages(curr => [...curr, p.new]))
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms', filter: `code=eq.${roomCode}` }, 
+        () => handleRoomExpiry())
+      .on('presence', { event: 'sync' }, () => setPresence(channel.presenceState()))
       .subscribe(async (status) => {
-        console.log("Subscription status:", status);
-        if (status === 'SUBSCRIBED') {
-          await channel.track({ online_at: new Date().toISOString() });
-        }
+        if (status === 'SUBSCRIBED') await channel.track({ online_at: new Date().toISOString() });
       });
 
-    return () => {
-      console.log("Cleaning up channel...");
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [view, roomCode, myName]);
 
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
-
-  // 3. Actions
-  const handleCreate = async () => {
-    if (!myName) return alert("Name required");
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const { error } = await supabase.from('rooms').insert([{ code, owner_name: myName }]);
-    if (error) alert("Create Room Error: " + error.message);
-    else { setRoomCode(code); setView("chat"); }
+  const handleRoomExpiry = async () => {
+    alert("30 minutes are up. Room is self-destructing...");
+    await supabase.from('messages').delete().eq('room_code', roomCode);
+    await supabase.from('rooms').delete().eq('code', roomCode);
+    window.location.href = window.location.origin;
   };
 
-  const handleJoin = async () => {
-    const { data } = await supabase.from('rooms').select('*').eq('code', roomCode).single();
-    if (data) setView("chat");
-    else alert("Room not found!");
+  const handleCreate = async () => {
+    if (!myName) return alert("Enter name");
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const { error } = await supabase.from('rooms').insert([{ code, owner_name: myName }]);
+    if (!error) { setRoomCode(code); setView("chat"); }
   };
 
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim()) return;
-    const content = input;
-    setInput("");
-
-    const { error } = await supabase.from('messages').insert([
-      { room_code: roomCode, sender_name: myName, content }
-    ]);
-    if (error) console.error("Send Error:", error);
+    const content = input; setInput("");
+    await supabase.from('messages').insert([{ room_code: roomCode, sender_name: myName, content }]);
   };
 
-  // 4. UI Rendering (Styles omitted for brevity, use your existing styles)
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  // 3. Views
   if (view === "landing") return (
     <div style={styles.authBg}><div style={styles.authCard}>
       <h1 style={styles.logo}>⚡ PULSE</h1>
-      <button style={styles.mainBtn} onClick={() => setView("create")}>Create Room</button>
+      <button style={styles.mainBtn} onClick={() => setView("create")}>Create Secure Room</button>
       <button style={{...styles.mainBtn, background: '#1C2535', marginTop: '10px'}} onClick={() => setView("join")}>Join Room</button>
     </div></div>
   );
 
   if (view === "create" || view === "join") return (
     <div style={styles.authBg}><div style={styles.authCard}>
-      <input style={styles.input} placeholder="Your Name" value={myName} onChange={e => setMyName(e.target.value)} />
+      <input style={styles.input} placeholder="Name" onChange={e => setMyName(e.target.value)} />
       {view === "join" && <input style={styles.input} placeholder="Room Code" value={roomCode} onChange={e => setRoomCode(e.target.value)} />}
-      <button style={styles.btn} onClick={view === "create" ? handleCreate : handleJoin}>Connect</button>
+      <button style={styles.btn} onClick={view === "create" ? handleCreate : () => setView("chat")}>Connect</button>
     </div></div>
   );
 
@@ -124,18 +120,23 @@ export default function PulseComplete() {
   return (
     <div style={styles.appFrame}>
       <div style={styles.sidebar}>
-        <div style={styles.sideLabel}>INVITE</div>
-        <QRCodeSVG value={inviteLink} size={120} bgColor="transparent" fgColor="#00FFD1" />
-        <div style={{...styles.sideLabel, marginTop: '20px'}}>MEMBERS</div>
-        {Object.keys(presence).map(u => <div key={u} style={{fontSize: '13px', marginBottom: '5px'}}>● {u}</div>)}
+        <div style={styles.timerBox}>
+          <div style={{fontSize: '10px', color: '#6B8099'}}>DESTRUCT IN</div>
+          <div style={{fontSize: '24px', fontWeight: 'bold', color: '#FF4060'}}>{timeLeft}</div>
+        </div>
+        <div style={styles.sideLabel}>SHARE</div>
+        <QRCodeSVG value={inviteLink} size={110} bgColor="transparent" fgColor="#00FFD1" />
+        <div style={{...styles.sideLabel, marginTop: '20px'}}>ACTIVE</div>
+        {Object.keys(presence).map(u => <div key={u} style={{fontSize: '13px', color: '#00FFD1'}}>● {u}</div>)}
       </div>
+
       <div style={styles.main}>
         <header style={styles.header}>Room: {roomCode}</header>
         <div style={styles.msgArea}>
           {messages.map((m, i) => (
             <div key={i} style={m.sender_name === myName ? styles.myRow : styles.theirRow}>
               <div style={m.sender_name === myName ? styles.myBubble : styles.theirBubble}>
-                <div style={{fontSize: '10px', color: '#00FFD1'}}>{m.sender_name}</div>
+                <div style={styles.senderName}>{m.sender_name}</div>
                 {m.content}
               </div>
             </div>
@@ -143,7 +144,7 @@ export default function PulseComplete() {
           <div ref={messagesEndRef} />
         </div>
         <form onSubmit={sendMessage} style={styles.footer}>
-          <input style={styles.msgInput} value={input} onChange={e => setInput(e.target.value)} placeholder="Message..." />
+          <input style={styles.msgInput} value={input} onChange={e => setInput(e.target.value)} placeholder="Type securely..." />
           <button type="submit" style={styles.sendBtn}>➤</button>
         </form>
       </div>
@@ -160,15 +161,17 @@ const styles = {
   btn: { width: '100%', padding: '14px', background: '#00FFD1', border: 'none', borderRadius: '12px', fontWeight: 'bold' },
   appFrame: { height: '100vh', display: 'flex', background: '#07090D', color: '#fff', fontFamily: 'sans-serif' },
   sidebar: { width: '200px', background: '#0C1018', borderRight: '1px solid #1C2535', padding: '20px' },
+  timerBox: { padding: '15px', background: 'rgba(255, 64, 96, 0.05)', borderRadius: '12px', border: '1px solid rgba(255, 64, 96, 0.2)', marginBottom: '20px', textAlign: 'center' },
   sideLabel: { fontSize: '10px', color: '#6B8099', letterSpacing: '1px', marginBottom: '10px' },
   main: { flex: 1, display: 'flex', flexDirection: 'column' },
-  header: { padding: '15px 25px', borderBottom: '1px solid #1C2535' },
+  header: { padding: '15px 25px', borderBottom: '1px solid #1C2535', background: '#0C1018' },
   msgArea: { flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px' },
   myRow: { alignSelf: 'flex-end' },
   theirRow: { alignSelf: 'flex-start' },
-  myBubble: { background: 'rgba(0, 255, 209, 0.15)', padding: '10px 15px', borderRadius: '15px 15px 0 15px', border: '1px solid #00FFD1' },
-  theirBubble: { background: '#111820', padding: '10px 15px', borderRadius: '15px 15px 15px 0', border: '1px solid #1C2535' },
-  footer: { padding: '20px', display: 'flex', gap: '10px' },
+  myBubble: { background: 'rgba(0, 255, 209, 0.15)', padding: '10px 15px', borderRadius: '15px 15px 0 15px', border: '1px solid #00FFD1', maxWidth: '80%' },
+  theirBubble: { background: '#111820', padding: '10px 15px', borderRadius: '15px 15px 15px 0', border: '1px solid #1C2535', maxWidth: '80%' },
+  senderName: { fontSize: '10px', color: '#00FFD1', marginBottom: '5px' },
+  footer: { padding: '20px', display: 'flex', gap: '10px', background: '#0C1018' },
   msgInput: { flex: 1, padding: '12px', background: '#111820', border: '1px solid #1C2535', borderRadius: '8px', color: '#fff', outline: 'none' },
   sendBtn: { background: '#00FFD1', border: 'none', padding: '0 20px', borderRadius: '8px', cursor: 'pointer' }
 };
